@@ -1,0 +1,7 @@
+opencv-python
+ultralytics
+requests
+numpy
+supervision
+shapely
+scikit-learn
