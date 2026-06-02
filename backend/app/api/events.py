@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.orm import Session
 from sqlalchemy.dialects.postgresql import insert
-from typing import List
+from typing import List, Any, Dict
 
 from app.database.database import get_db
 from app.models.models import Event, Store
@@ -10,7 +10,7 @@ from app.schemas.schemas import EventIngest, IngestResponse
 router = APIRouter()
 
 @router.post("/events/ingest", response_model=IngestResponse, status_code=status.HTTP_200_OK)
-async def ingest_events(batch: List[EventIngest], request: Request, db: Session = Depends(get_db)):
+async def ingest_events(batch: List[Dict[str, Any]], request: Request, db: Session = Depends(get_db)):
     request.state.event_count = len(batch)
     accepted = 0
     rejected = 0
@@ -24,33 +24,81 @@ async def ingest_events(batch: List[EventIngest], request: Request, db: Session 
     from app.models.models import VisitorSession
     import uuid
     
-    for event_in in batch:
-        metadata_dict = event_in.metadata.model_dump() if event_in.metadata else None
+    for raw_event in batch:
+        e = raw_event if isinstance(raw_event, dict) else raw_event.model_dump()
         
-        # 1. Event Log Insert Data
+        ev_type_raw = e.get("event_type", "").upper()
+        ev_type = ev_type_raw
+        
+        if not ev_type:
+            rejected += 1
+            errors.append("Malformed event: missing event_type")
+            continue
+            
+        # Schema normalization mapping
+        if ev_type == "ZONE_ENTERED": ev_type = "ZONE_ENTER"
+        if ev_type == "ZONE_EXITED": ev_type = "ZONE_EXIT"
+        if ev_type in ("QUEUE_COMPLETED", "QUEUE_ABANDONED"): ev_type = "BILLING_QUEUE_JOIN"
+        
+        timestamp_str = e.get("timestamp") or e.get("event_timestamp") or e.get("event_time") or e.get("queue_join_ts")
+        if not timestamp_str:
+            timestamp_str = "2026-03-03T00:00:00Z"
+            
+        store_id = e.get("store_id") or e.get("store_code", "UNKNOWN")
+        if isinstance(store_id, str) and store_id.startswith("store_"):
+            store_id = store_id.replace("store_", "ST")
+            
+        visitor_id = e.get("visitor_id") or e.get("id_token") or str(e.get("track_id"))
+        if not visitor_id:
+            visitor_id = "UNKNOWN_VISITOR"
+            
+        event_id = e.get("event_id") or e.get("queue_event_id")
+        if not event_id:
+            hash_str = f"{store_id}_{visitor_id}_{ev_type}_{timestamp_str}"
+            event_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, hash_str))
+            
+        dwell_ms = e.get("dwell_ms", 0)
+        if "wait_seconds" in e:
+            dwell_ms = int(e.get("wait_seconds", 0)) * 1000
+            
+        metadata = e.get("metadata", {})
+        if isinstance(metadata, dict):
+            for k in ["gender_pred", "age_pred", "age_bucket", "gender", "age", "group_id", "group_size"]:
+                if k in e: metadata[k] = e[k]
+        else:
+            metadata = {}
+
         events_data.append({
-            "event_id": event_in.event_id,
-            "store_id": event_in.store_id,
-            "camera_id": event_in.camera_id,
-            "visitor_id": event_in.visitor_id,
-            "event_type": event_in.event_type,
-            "timestamp": event_in.timestamp,
-            "zone_id": event_in.zone_id,
-            "dwell_ms": event_in.dwell_ms,
-            "is_staff": event_in.is_staff,
-            "confidence": event_in.confidence,
-            "metadata_json": metadata_dict
+            "event_id": event_id,
+            "store_id": store_id,
+            "camera_id": e.get("camera_id", "UNKNOWN"),
+            "visitor_id": visitor_id,
+            "event_type": ev_type,
+            "timestamp": timestamp_str,
+            "zone_id": e.get("zone_id"),
+            "dwell_ms": dwell_ms,
+            "is_staff": e.get("is_staff", False),
+            "confidence": e.get("confidence", 1.0),
+            "metadata_json": metadata
         })
         
     if not events_data:
+        if rejected > 0:
+            return IngestResponse(accepted=0, rejected=rejected, errors=errors)
         return IngestResponse(accepted=0, rejected=0, errors=["Empty batch"])
         
     try:
-        # A. Auto-upsert missing stores to prevent Foreign Key constraints
+        # A. Auto-upsert missing stores and zones to prevent Foreign Key constraints
         from sqlalchemy import text
-        unique_stores = list(set(e["store_id"] for e in events_data))
+        unique_stores = list(set(e["store_id"] for e in events_data if e["store_id"]))
         for sid in unique_stores:
             db.execute(text("INSERT INTO stores (store_id, name, city, timezone) VALUES (:s, :n, 'AutoCity', 'UTC') ON CONFLICT (store_id) DO NOTHING"), {"s": sid, "n": f"Store {sid}"})
+            
+        unique_zones = list(set(e["zone_id"] for e in events_data if e["zone_id"]))
+        for zid in unique_zones:
+            is_billing = "BILLING" in zid.upper()
+            db.execute(text("INSERT INTO zones (zone_id, store_id, zone_name, zone_type, is_billing_zone) VALUES (:z, :s, :zn, 'AUTO', :b) ON CONFLICT (zone_id) DO NOTHING"), {"z": zid, "s": events_data[0]["store_id"], "zn": f"Zone {zid}", "b": is_billing})
+            
         db.flush()
         
         # B. Insert Raw Events

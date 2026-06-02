@@ -12,23 +12,43 @@ async def run_pos_correlation():
         from datetime import datetime, timedelta
         from app.models.models import Transaction, VisitorSession, Event
         
-        csv_path = "/data/pos_transactions.csv"
-        if not os.path.exists(csv_path):
-            logger.warning(f"POS data file not found at {csv_path}")
+        import glob
+        
+        # Find any POS CSV file in the /data directory
+        csv_files = glob.glob("/data/POS*.csv") + glob.glob("/data/pos*.csv")
+        if not csv_files:
+            logger.warning("POS data file not found in /data")
             return
             
-        with open(csv_path, 'r') as f:
+        csv_path = csv_files[0]
+            
+        with open(csv_path, 'r', encoding='utf-8') as f:
             reader = csv.DictReader(f)
-            # Schema: store_id, transaction_id, timestamp, basket_value_inr
+            # Schema: order_id,order_date,order_time,store_id,product_id,brand_name,total_amount
             for row in reader:
-                txn_id = row['transaction_id'].strip()
+                txn_id = row['order_id'].strip()
                 store_id = row['store_id'].strip()
-                txn_time = datetime.fromisoformat(row['timestamp'].strip().replace('Z', '+00:00'))
-                basket_val = float(row['basket_value_inr'].strip())
+                if store_id.startswith("store_"):
+                    store_id = store_id.replace("store_", "ST")
+                    
+                date_str = row['order_date'].strip()
+                time_str = row['order_time'].strip()
+                # 10-04-2026 12:15:05
+                try:
+                    txn_time = datetime.strptime(f"{date_str} {time_str}", "%d-%m-%Y %H:%M:%S")
+                except ValueError:
+                    continue
+                    
+                basket_val = float(row['total_amount'].strip())
                 
                 # Check if txn already exists
                 existing = db.query(Transaction).filter(Transaction.invoice_number == txn_id).first()
                 if not existing:
+                    # Auto-upsert store
+                    from sqlalchemy import text
+                    db.execute(text("INSERT INTO stores (store_id, name, city, timezone) VALUES (:s, :n, 'AutoCity', 'UTC') ON CONFLICT (store_id) DO NOTHING"), {"s": store_id, "n": f"Store {store_id}"})
+                    db.flush()
+                    
                     # Look for an unconverted session in the billing zone within 5 mins prior
                     five_mins_prior = txn_time - timedelta(minutes=5)
                     

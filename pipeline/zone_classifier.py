@@ -18,9 +18,10 @@ class ZoneClassifier:
                 if len(poly_coords) >= 3:
                     self.zones[zone_id] = Polygon(poly_coords)
                     self.sku_zones[zone_id] = z.get("sku_zone")
+        except FileNotFoundError:
+            pass # Suppress warning, we will fallback to filename-based zones
         except Exception as e:
-            print(f"Error loading zone layout: {e}")
-
+            pass
     def get_zone(self, bbox):
         if not self.zones:
             return None

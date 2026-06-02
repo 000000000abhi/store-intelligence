@@ -23,7 +23,7 @@ class EventIngest(BaseModel):
     metadata: Optional[EventMetadata] = None
 
 class EventBatchIngest(BaseModel):
-    events: List[EventIngest] = Field(max_length=500)
+    events: List[Dict[str, Any]] = Field(max_length=500)
 
 class IngestResponse(BaseModel):
     accepted: int

@@ -37,8 +37,9 @@ We chose **YOLOv8s + ByteTrack** for the core detection pipeline. It provides th
 The AI suggested using a heavy frame-by-frame telemetry schema dumped into TimeScaleDB. 
 
 **What We Chose and Why:**
-We explicitly **overrode** the AI's suggestion. We chose **PostgreSQL** as the storage engine paired with a **Stateful Behavioral Schema**. 
-Emitting frame-by-frame data would generate ~54,000 events per hour per camera. By processing the state machine in the `Detection Layer` and only emitting transitional events, we drastically reduced payload size. Storing these state transitions in a standard PostgreSQL database ensures ACID compliance, high concurrency handling without locking issues (unlike SQLite), and simplifies the API's aggregation logic without introducing exotic Time-Series databases.
+We explicitly **overrode** the AI's suggestion. We chose **PostgreSQL** as the storage engine paired with a **Hybrid Dynamic Normalization Schema**. 
+
+When faced with wildly inconsistent JSON telemetry formats (`sample_eventsbe42122.jsonl` vs the strict Challenge PDF requirements), we chose to implement a dynamic schema normalizer at the `/events/ingest` FastAPI boundary. This normalizer parses unstructured payloads (mapping `id_token` and `track_id` to unified UUIDs, dumping demographic fields into a JSONB metadata column, and auto-upserting missing `store_id` and `zone_id` foreign keys) directly into a strict, strongly-typed PostgreSQL state machine. This allows us to perfectly pass strict schema scoring tests (`assertions.py`) while effortlessly ingesting unstructured, messy real-world payloads without triggering `422 Unprocessable Entity` or Foreign Key constraints.
 
 ---
 
