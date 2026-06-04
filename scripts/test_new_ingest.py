@@ -1,7 +1,11 @@
 import json
 import httpx
 
-with open(r'c:\Users\abhijeet.ansal\Desktop\purpelle\store-intelligence\Resources\sample_eventsbe42122.jsonl') as f:
+import os
+
+script_dir = os.path.dirname(__file__)
+file_path = os.path.join(script_dir, '..', 'Resources', 'sample_eventsbe42122.jsonl')
+with open(file_path) as f:
     events = [json.loads(line) for line in f if line.strip()]
 
 r = httpx.post("http://localhost:8000/events/ingest", json=events)

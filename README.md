@@ -1,5 +1,6 @@
 # Purplle Tech Challenge 2026 — Store Intelligence
 
+
 Welcome to the Brigade Road Store Intelligence system. This repository processes raw CCTV footage, tracks unique visitors across zones, correlates them with Point-of-Sale data, and generates real-time conversion funnels.
 
 ## Directory Structure
